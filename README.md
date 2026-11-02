@@ -12,6 +12,7 @@ flag, Steamworks, or GNS to a build.
 | `src/online/serialize.h` | Tiny explicit little-endian packet `Writer` / `Reader` |
 | `src/online/local.h` | In-process server/client transport for single-player and tests |
 | `src/online/online.h` | Convenience include for all of the above |
+| `src/online/testing.h` | Optional test support: event pump/matchers, sequence envelope, fault-injecting transport decorator |
 
 Backends that need a real library (standalone GNS first, Steamworks later)
 are intentionally **opt-in**: a game that wants one adds that backend's one
@@ -39,3 +40,19 @@ release pipeline should build protobuf statically too (see script header).
 `pumpkin-beachball` (Slime Volleyball) is the first consumer. This folder is
 kept self-contained so it can be split into its own repository without
 changing the public header surface.
+
+## Testing
+
+- `tests/online_core_test.cpp` — codec, local transport, and test-support
+  units. No dependencies.
+- `tests/online_gns_test.cpp` — small real-UDP smoke test.
+- `tests/online_e2e_test.cpp` — configurable end-to-end contract matrix:
+  24 scenarios (lifecycle, routing, channels, payload boundaries,
+  disconnects, capacity, simultaneous joins, flood, reconnect/restart, and
+  fault injection) run against `LocalTransport` and, when compiled with
+  `-DONLINE_E2E_WITH_GNS`, `GnsTransport`. Run it with `--help`; backend
+  differences are explicit capability flags and known gaps report as
+  `XFAIL` instead of being hidden.
+
+See `docs/e2e-testing.md` for the full layered strategy, every runner
+option, the setup/failure-mode playbook, and suggested CI tiers.

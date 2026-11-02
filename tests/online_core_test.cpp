@@ -1,4 +1,5 @@
 #include "../src/online/online.h"
+#include "../src/online/testing.h"
 
 #include <cassert>
 #include <iostream>
@@ -120,10 +121,84 @@ static void test_local_disconnect_peer() {
   expect(client_saw, "dropped client sees disconnect");
 }
 
+static void test_testing_sequence_envelope() {
+  using namespace afterhours::online::testing;
+  auto encoded = encode_sequence_packet(9, "body");
+  auto decoded = decode_sequence_packet(encoded);
+  expect(decoded && decoded->sequence == 9 && decoded->body == "body",
+         "sequence envelope round-trips");
+
+  encoded[6] = static_cast<std::byte>(
+      std::to_integer<unsigned char>(encoded[6]) ^ 0xFFu);
+  expect(!decode_sequence_packet(encoded),
+         "sequence envelope checksum rejects corruption");
+
+  SequenceTracker tracker;
+  expect(tracker.observe(2) == SequenceTracker::Observation::Accepted,
+         "tracker accepts first sequence");
+  expect(tracker.observe(1) == SequenceTracker::Observation::Accepted,
+         "tracker accepts reordered sequence");
+  expect(tracker.observe(2) == SequenceTracker::Observation::Duplicate,
+         "tracker detects duplicate");
+  expect(tracker.unique_count() == 2 && tracker.duplicates() == 1 &&
+             tracker.inversions() == 1 && tracker.missing_in_range() == 0,
+         "tracker summarizes duplicate/reorder");
+}
+
+static void test_testing_fault_transport() {
+  using namespace afterhours::online::testing;
+  auto hub = std::make_shared<LocalHub>();
+  LocalTransport server(hub);
+  expect(server.listen(7777), "fault-test server listens");
+
+  FaultConfig faults;
+  faults.seed = 7;
+  faults.drop_first_sends = 1;
+  FaultTransport client(std::make_unique<LocalTransport>(hub), faults);
+  expect(client.connect("local", 7777), "fault-test client connects");
+  while (server.poll()) {
+  }
+  while (client.poll()) {
+  }
+
+  expect(client.send(kServerPeer, bytes_from("retry"), Channel::Reliable),
+         "dropped send reports success by default");
+  expect(!next_packet(server), "first send is dropped");
+  expect(client.send(kServerPeer, bytes_from("retry"), Channel::Reliable),
+         "retry send succeeds");
+  auto retried = next_packet(server);
+  expect(retried && view_bytes(retried->payload) == "retry", "retry arrives");
+  expect(client.stats().sends_dropped == 1, "fault stats record drop");
+
+  client.config().drop_first_sends = 0;
+  client.config().duplicate_send_rate = 1.0;
+  auto duplicate_payload = encode_sequence_packet(5, "twice");
+  expect(client.send(kServerPeer, duplicate_payload, Channel::Reliable),
+         "duplicated send succeeds");
+  auto first = next_packet(server);
+  auto second = next_packet(server);
+  expect(first && second && first->payload == duplicate_payload &&
+             second->payload == duplicate_payload,
+         "duplicate copies both arrive");
+
+  client.config().duplicate_send_rate = 0.0;
+  client.config().corruption = Corruption::FlipByte;
+  client.config().corrupt_send_rate = 1.0;
+  client.config().corrupt_offset = 6;
+  auto checked = encode_sequence_packet(6, "checked");
+  expect(client.send(kServerPeer, checked, Channel::Reliable),
+         "corrupted send succeeds at transport");
+  auto corrupted = next_packet(server);
+  expect(corrupted && !decode_sequence_packet(corrupted->payload),
+         "corrupted sequence packet is rejected");
+}
+
 int main() {
   test_codec();
   test_local_transport();
   test_local_disconnect_peer();
+  test_testing_sequence_envelope();
+  test_testing_fault_transport();
   expect(protocol_hash("slime-v1") == protocol_hash("slime-v1"),
          "protocol hash stable");
   expect(protocol_hash("slime-v1") != protocol_hash("slime-v2"),
