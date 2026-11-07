@@ -540,6 +540,13 @@ static void scenario_connect_without_server(TestContext &ctx, Driver &driver) {
   ctx.expect(!connected, "unreachable client does not report connected");
   ctx.expect(disconnected,
              "unreachable client receives a terminal Disconnected event");
+  bool unreachable_reason = false;
+  for (const auto &recorded : pump.log()) {
+    if (const auto *d = std::get_if<Disconnected>(&recorded.event))
+      unreachable_reason = d->reason == DisconnectReason::Unreachable;
+  }
+  ctx.expect(unreachable_reason,
+             "unreachable disconnect carries the Unreachable reason");
   ctx.note("unreachable observation: connected=" + std::to_string(connected) +
            " disconnected=" + std::to_string(disconnected));
   endpoint->close();
@@ -787,6 +794,15 @@ static void scenario_capacity_and_extra_client(TestContext &ctx, Driver &driver)
   ctx.expect(online_testing::has_disconnected(session.log(), endpoint_name(extra),
                                               kServerPeer),
              "capacity-rejected client receives an explicit terminal event");
+  bool rejected_reason = false;
+  for (const auto &recorded : session.log()) {
+    if (recorded.endpoint == endpoint_name(extra)) {
+      if (const auto *d = std::get_if<Disconnected>(&recorded.event))
+        rejected_reason = d->reason == DisconnectReason::Rejected;
+    }
+  }
+  ctx.expect(rejected_reason,
+             "capacity disconnect carries the Rejected reason");
   ctx.require(send_text(session.client(0), kServerPeer, "capacity-survivor"),
               "accepted client still sends after rejection");
   ctx.expect(wait_for_packet(session, "server", "capacity-survivor").has_value(),

@@ -33,6 +33,10 @@ bool GnsTransport::broadcast(std::span<const std::byte> payload,
 }
 std::optional<Event> GnsTransport::poll() { return impl_->poll(); }
 
+std::optional<ConnectionStats>
+GnsTransport::connection_stats(PeerId peer) const {
+  return impl_->connection_stats(peer);
+}
 PeerId GnsTransport::local_peer_id() const { return impl_->local_id; }
 bool GnsTransport::is_server() const { return impl_->server; }
 bool GnsTransport::is_open() const { return impl_->open; }

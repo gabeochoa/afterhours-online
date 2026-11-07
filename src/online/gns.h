@@ -43,6 +43,8 @@ public:
   [[nodiscard]] PeerId local_peer_id() const override;
   [[nodiscard]] bool is_server() const override;
   [[nodiscard]] bool is_open() const override;
+  [[nodiscard]] std::optional<ConnectionStats>
+  connection_stats(PeerId peer) const override;
 
   // Client only: record the server-assigned id from the game handshake.
   void set_local_peer_id(PeerId peer) override;

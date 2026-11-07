@@ -60,16 +60,17 @@ closes still needs the reason field in item 3.
 
 ### 3. Disconnect reasons and connection stats stay inside GNS
 
-`Disconnected` carries only a peer ID. The GNS callback receives an
-end reason and debug string, prints the debug text to stderr, and then
-drops both. `Transport` also has no portable query for connection
-state, remote address, ping, quality, rates, pending bytes, queue
-time, or jitter, even though GNS exposes those through connection
-info and real-time status structures.
-
-Add a small portable reason enum first. Add stats only if they can be
-represented honestly by LocalTransport and future backends; do not
-expose a GNS-shaped struct as the portable API.
+Resolution (2026-11-05): closed. `Disconnected` now carries a
+portable `DisconnectReason` (`Unknown`, `ClosedByPeer`, `Unreachable`,
+`Rejected`, `LocalProblem`, `LocalClose`); the GNS backend maps its
+native end reasons onto it, including a dedicated app-range code for
+capacity rejection, and LocalTransport reports `LocalClose` to the
+initiator and `ClosedByPeer` to everyone else. `Transport` also gained
+an optional `connection_stats()` query (ping, quality, rates, pending
+bytes, queue time, jitter); GNS fills it from real-time status and
+LocalTransport reports a perfect in-process link. Games may still want
+their own application-level ping as an end-to-end game-loop check;
+Pumpkin Beachball keeps its Ping/Pong for exactly that reason.
 
 ### 4. Address parsing is narrower than the API suggests
 

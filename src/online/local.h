@@ -22,7 +22,7 @@ struct LocalHub {
     std::deque<Event> events;
   };
 
-  std::mutex mutex;
+  mutable std::mutex mutex;
   std::map<PeerId, std::shared_ptr<Inbox>> inboxes;
   PeerId next_peer_id = kFirstRemotePeer;
   bool has_server = false;
@@ -81,7 +81,7 @@ public:
       if (server_)
         hub_->has_server = false;
     }
-    notify_all(Disconnected{closing}, closing);
+    notify_all(Disconnected{closing, DisconnectReason::ClosedByPeer}, closing);
     inbox_.reset();
     local_id_ = kInvalidPeer;
     server_ = false;
@@ -104,11 +104,13 @@ public:
     // so the event is still deliverable after hub removal.
     {
       std::lock_guard lock(dropped->mutex);
-      dropped->events.emplace_back(Disconnected{local_id_});
+      dropped->events.emplace_back(
+          Disconnected{local_id_, DisconnectReason::ClosedByPeer});
     }
     if (inbox_) {
       std::lock_guard lock(inbox_->mutex);
-      inbox_->events.emplace_back(Disconnected{peer});
+      inbox_->events.emplace_back(
+          Disconnected{peer, DisconnectReason::LocalClose});
     }
     return true;
   }
@@ -150,6 +152,21 @@ public:
   [[nodiscard]] PeerId local_peer_id() const override { return local_id_; }
   [[nodiscard]] bool is_server() const override { return server_; }
   [[nodiscard]] bool is_open() const override { return open_; }
+
+  [[nodiscard]] std::optional<ConnectionStats>
+  connection_stats(PeerId peer) const override {
+    if (!open_ || !hub_ || peer == local_id_)
+      return std::nullopt;
+    std::lock_guard lock(hub_->mutex);
+    if (!hub_->inboxes.contains(peer))
+      return std::nullopt;
+    ConnectionStats stats;
+    stats.ping_ms = 0;
+    stats.quality_local = 1.f;
+    stats.quality_remote = 1.f;
+    stats.jitter_us = 0;
+    return stats;
+  }
 
 private:
   bool push_to(PeerId to, Event event) {

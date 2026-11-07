@@ -81,6 +81,30 @@ inline int gns_send_flags(Channel channel) {
   return k_nSteamNetworkingSend_Unreliable;
 }
 
+// App-range (1000-1999) end reason this backend sends when it rejects
+// a connection for capacity, so the client can tell "server full"
+// apart from an ordinary application close.
+inline constexpr int kEndReasonCapacity = 1001;
+
+inline DisconnectReason map_end_reason(int code, bool problem_locally) {
+  if (code == kEndReasonCapacity)
+    return DisconnectReason::Rejected;
+  if (code == k_ESteamNetConnectionEnd_Remote_Timeout ||
+      code == k_ESteamNetConnectionEnd_Misc_Timeout)
+    return DisconnectReason::Unreachable;
+  if (code >= k_ESteamNetConnectionEnd_App_Min &&
+      code <= k_ESteamNetConnectionEnd_AppException_Max)
+    return DisconnectReason::ClosedByPeer;
+  if (code >= k_ESteamNetConnectionEnd_Local_Min &&
+      code <= k_ESteamNetConnectionEnd_Local_Max)
+    return DisconnectReason::LocalProblem;
+  if (code >= k_ESteamNetConnectionEnd_Remote_Min &&
+      code <= k_ESteamNetConnectionEnd_Remote_Max)
+    return DisconnectReason::ClosedByPeer;
+  return problem_locally ? DisconnectReason::LocalProblem
+                         : DisconnectReason::Unknown;
+}
+
 struct GnsImplBase {
   virtual ~GnsImplBase() = default;
   virtual void
@@ -247,7 +271,8 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
       iface->CloseConnection(client_conn, 0, "left", true);
       client_conn = k_HSteamNetConnection_Invalid;
       client_connected = false;
-      pending.emplace_back(Disconnected{kServerPeer});
+      pending.emplace_back(
+          Disconnected{kServerPeer, DisconnectReason::LocalClose});
       return true;
     }
     auto it = peer_to_conn.find(peer);
@@ -258,7 +283,7 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
     conn_to_peer.erase(conn);
     detail::gns_conn_registry().erase(conn);
     iface->CloseConnection(conn, 0, "disconnected by server", true);
-    pending.emplace_back(Disconnected{peer});
+    pending.emplace_back(Disconnected{peer, DisconnectReason::LocalClose});
     return true;
   }
 
@@ -296,6 +321,42 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
     for (PeerId peer : targets)
       sent = send(peer, payload, channel) || sent;
     return sent;
+  }
+
+  std::optional<ConnectionStats> connection_stats(PeerId peer) const {
+    if (!open || iface == nullptr)
+      return std::nullopt;
+    HSteamNetConnection conn = k_HSteamNetConnection_Invalid;
+    if (server) {
+      const auto it = peer_to_conn.find(peer);
+      if (it == peer_to_conn.end())
+        return std::nullopt;
+      conn = it->second;
+    } else {
+      if (peer != kServerPeer ||
+          client_conn == k_HSteamNetConnection_Invalid)
+        return std::nullopt;
+      conn = client_conn;
+    }
+    SteamNetConnectionRealTimeStatus_t raw{};
+    if (iface->GetConnectionRealTimeStatus(conn, &raw, 0, nullptr) !=
+        k_EResultOK)
+      return std::nullopt;
+    ConnectionStats stats;
+    stats.ping_ms = raw.m_nPing;
+    stats.quality_local = raw.m_flConnectionQualityLocal;
+    stats.quality_remote = raw.m_flConnectionQualityRemote;
+    stats.out_packets_per_sec = raw.m_flOutPacketsPerSec;
+    stats.out_bytes_per_sec = raw.m_flOutBytesPerSec;
+    stats.in_packets_per_sec = raw.m_flInPacketsPerSec;
+    stats.in_bytes_per_sec = raw.m_flInBytesPerSec;
+    stats.send_rate_bytes_per_sec = raw.m_nSendRateBytesPerSecond;
+    stats.pending_unreliable = raw.m_cbPendingUnreliable;
+    stats.pending_reliable = raw.m_cbPendingReliable;
+    stats.sent_unacked_reliable = raw.m_cbSentUnackedReliable;
+    stats.queue_time_us = static_cast<std::int64_t>(raw.m_usecQueueTime);
+    stats.jitter_us = raw.m_usecMaxJitter;
+    return stats;
   }
 
   std::optional<Event> poll() {
@@ -360,8 +421,12 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
     case k_ESteamNetworkingConnectionState_Connecting: {
       if (!server)
         break;
-      if (conn_to_peer.size() >= kMaxPeers ||
-          iface->AcceptConnection(info->m_hConn) != k_EResultOK ||
+      if (conn_to_peer.size() >= kMaxPeers) {
+        iface->CloseConnection(info->m_hConn, detail::kEndReasonCapacity,
+                               "server full", false);
+        break;
+      }
+      if (iface->AcceptConnection(info->m_hConn) != k_EResultOK ||
           !iface->SetConnectionPollGroup(info->m_hConn, poll_group)) {
         iface->CloseConnection(info->m_hConn, 0, nullptr, false);
         break;
@@ -388,10 +453,14 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
       std::fprintf(stderr, "[gns] connection ended: reason %d: %s\n",
                    info->m_info.m_eEndReason, info->m_info.m_szEndDebug);
       detail::gns_conn_registry().erase(info->m_hConn);
+      const DisconnectReason reason = detail::map_end_reason(
+          info->m_info.m_eEndReason,
+          info->m_info.m_eState ==
+              k_ESteamNetworkingConnectionState_ProblemDetectedLocally);
       if (server) {
         if (auto it = conn_to_peer.find(info->m_hConn);
             it != conn_to_peer.end()) {
-          pending.emplace_back(Disconnected{it->second});
+          pending.emplace_back(Disconnected{it->second, reason});
           peer_to_conn.erase(it->second);
           conn_to_peer.erase(it);
         }
@@ -399,7 +468,7 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
         // A connection attempt can end before Connected is delivered.
         // That is still terminal for the caller; without this event it
         // has no way to distinguish failure from a slow connection.
-        pending.emplace_back(Disconnected{kServerPeer});
+        pending.emplace_back(Disconnected{kServerPeer, reason});
         client_connected = false;
         client_conn = k_HSteamNetConnection_Invalid;
       }

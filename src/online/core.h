@@ -31,8 +31,40 @@ struct Connected {
   PeerId peer;
 };
 
+// Why a connection ended, in portable terms. Backends map their native
+// codes onto these; anything unrecognized stays Unknown rather than
+// leaking a backend error number into game code.
+enum class DisconnectReason : std::uint8_t {
+  Unknown,
+  ClosedByPeer,  // the other end closed (or its app dropped us)
+  Unreachable,   // timed out before or while connected
+  Rejected,      // refused by the peer (e.g. server at capacity)
+  LocalProblem,  // this host's network stack reported a problem
+  LocalClose,    // this endpoint initiated the close
+};
+
 struct Disconnected {
   PeerId peer;
+  DisconnectReason reason = DisconnectReason::Unknown;
+};
+
+// A snapshot of one connection's health. Values a backend cannot
+// measure stay at their "unknown" defaults (-1). Jitter is a
+// high-water mark since the previous query on backends that track it.
+struct ConnectionStats {
+  int ping_ms = -1;
+  float quality_local = -1.f;  // 0..1 delivered, locally observed
+  float quality_remote = -1.f; // 0..1 delivered, peer observed
+  float out_packets_per_sec = 0.f;
+  float out_bytes_per_sec = 0.f;
+  float in_packets_per_sec = 0.f;
+  float in_bytes_per_sec = 0.f;
+  int send_rate_bytes_per_sec = 0;
+  std::int64_t pending_unreliable = 0;
+  std::int64_t pending_reliable = 0;
+  std::int64_t sent_unacked_reliable = 0;
+  std::int64_t queue_time_us = 0;
+  int jitter_us = -1;
 };
 
 struct Packet {
@@ -80,6 +112,13 @@ public:
   [[nodiscard]] virtual PeerId local_peer_id() const = 0;
   [[nodiscard]] virtual bool is_server() const = 0;
   [[nodiscard]] virtual bool is_open() const = 0;
+
+  // Connection health for one peer, when the backend can measure it.
+  // Backends without a native source return std::nullopt (the default).
+  [[nodiscard]] virtual std::optional<ConnectionStats>
+  connection_stats(PeerId) const {
+    return std::nullopt;
+  }
 };
 
 inline std::vector<std::byte> bytes_from(std::string_view text) {

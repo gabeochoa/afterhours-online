@@ -424,6 +424,10 @@ public:
   [[nodiscard]] bool is_open() const override {
     return inner_ && inner_->is_open();
   }
+  [[nodiscard]] std::optional<ConnectionStats>
+  connection_stats(PeerId peer) const override {
+    return inner_ ? inner_->connection_stats(peer) : std::nullopt;
+  }
 
   void set_blackout_sends(bool enabled) { blackout_sends_ = enabled; }
   void set_blackout_receives(bool enabled) { blackout_receives_ = enabled; }

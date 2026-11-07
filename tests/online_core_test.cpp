@@ -103,22 +103,30 @@ static void test_local_disconnect_peer() {
   while (client.poll()) {
   }
 
+  const auto server_stats = server.connection_stats(client_id);
+  expect(server_stats && server_stats->ping_ms == 0 &&
+             server_stats->quality_local == 1.f,
+         "local stats report a perfect in-process link");
+  expect(!server.connection_stats(424242), "unknown peer has no stats");
+
   expect(server.disconnect(client_id), "server drops one peer");
   expect(!server.disconnect(client_id), "second drop reports false");
 
   bool server_saw = false;
   while (auto event = server.poll()) {
     if (auto *d = std::get_if<Disconnected>(&*event))
-      server_saw = d->peer == client_id;
+      server_saw = d->peer == client_id &&
+                   d->reason == DisconnectReason::LocalClose;
   }
-  expect(server_saw, "server sees its own peer drop");
+  expect(server_saw, "server sees its own peer drop as a local close");
 
   bool client_saw = false;
   while (auto event = client.poll()) {
     if (auto *d = std::get_if<Disconnected>(&*event))
-      client_saw = d->peer == kServerPeer;
+      client_saw = d->peer == kServerPeer &&
+                   d->reason == DisconnectReason::ClosedByPeer;
   }
-  expect(client_saw, "dropped client sees disconnect");
+  expect(client_saw, "dropped client sees a closed-by-peer disconnect");
 }
 
 static void test_testing_sequence_envelope() {

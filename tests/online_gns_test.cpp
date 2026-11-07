@@ -102,6 +102,12 @@ int main() {
          "server peer list");
   expect(client.peers() == std::vector<PeerId>{kServerPeer},
          "client peer list");
+  const auto client_stats = client.connection_stats(kServerPeer);
+  expect(client_stats && client_stats->ping_ms >= 0,
+         "client reads native connection stats");
+  expect(server.connection_stats(kFirstRemotePeer).has_value(),
+         "server reads native connection stats");
+  expect(!client.connection_stats(424242), "unknown peer has no stats");
 
   client.set_local_peer_id(kFirstRemotePeer);
   expect(client.local_peer_id() == kFirstRemotePeer, "client learns its id");
