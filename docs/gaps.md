@@ -1,0 +1,216 @@
+# afterhours-online gaps and backlog
+
+Last reviewed: 2026-11-05, against this repository at `fb97f1c` and
+its first consumer, Pumpkin Beachball at `73de546`.
+
+This file is the library-owned backlog. Pumpkin Beachball keeps the
+consumer-side evidence and game-integration limits in its
+`docs/afterhours-online-gaps.md`; entries below should stay at the
+transport/API level and should not grow game-specific packet schemas.
+
+## Current surface
+
+- Header-only `core.h`, `serialize.h`, `local.h`, `online.h`, and
+  optional `testing.h`.
+- Standalone GNS through one opt-in translation unit, `gns.cpp`.
+- No ECS dependency in the core. A game supplies its own session state,
+  handshake, snapshots, menus, and HUD.
+- Local and GNS transports share one event model: `Connected`,
+  `Disconnected`, and opaque `Packet`s over reliable, unreliable, and
+  unreliable-no-delay channels.
+
+## Confirmed library gaps
+
+### 1. Early client failure has no terminal event
+
+The GNS client queues `Disconnected` for a closing connection only if
+it previously reached `Connected`. An unreachable endpoint can
+therefore leave a consumer waiting forever unless the game adds its
+own deadline and cancellation UI.
+
+The transport matrix records this as `connect_without_server` XFAIL.
+Close it by synthesizing exactly one terminal event for a client
+connection that ends before `Connected`, including the case where the
+connection was never fully established. Local `close()` and
+`disconnect()` must not double-report.
+
+### 2. Capacity rejection is silent at the transport layer
+
+When the GNS server already has four remote peers, it closes a new
+connection during the Connecting callback. The accepted clients keep
+working, but the rejected client gets no explicit terminal event and
+the server gets no dedicated rejection event.
+
+The transport matrix records this as `capacity_and_extra_client`
+XFAIL. A game can cover lower game-specific caps with its own Bye
+message after Hello, as Pumpkin Beachball does for its third player,
+but that does not help a fifth transport peer or another consumer
+whose game cap equals the backend cap.
+
+Close it with the same terminal-event guarantee as item 1. If events
+gain reasons, capacity rejection should be distinguishable from an
+unreachable endpoint.
+
+### 3. Disconnect reasons and connection stats stay inside GNS
+
+`Disconnected` carries only a peer ID. The GNS callback receives an
+end reason and debug string, prints the debug text to stderr, and then
+drops both. `Transport` also has no portable query for connection
+state, remote address, ping, quality, rates, pending bytes, queue
+time, or jitter, even though GNS exposes those through connection
+info and real-time status structures.
+
+Add a small portable reason enum first. Add stats only if they can be
+represented honestly by LocalTransport and future backends; do not
+expose a GNS-shaped struct as the portable API.
+
+### 4. Address parsing is narrower than the API suggests
+
+`Transport::connect(host, port)` takes a host string, but the GNS
+backend passes `host:port` to `SteamNetworkingIPAddr::ParseString`.
+There is no DNS resolution in the library. A hostname therefore fails
+as a bad address even though the parameter is named `host`, not `ip`.
+
+IPv6 is also not exercised end to end: GNS address types support IPv6
+and bracketed literals, but consumers may impose their own single-colon
+`host:port` parser before the library sees the value.
+
+Decide and document one endpoint contract:
+
+- numeric IP only, with a type/name that says so and bracketed IPv6
+  tests; or
+- endpoint strings that may be DNS names, resolved by the backend with
+  explicit resolution errors and an IPv4/IPv6 selection policy.
+
+### 5. The ECS layer from the original plan is absent
+
+The core deliberately has no ECS dependency. That part works: a game
+can include the core without changing its link line. What does not
+exist is the optional second layer from the original design:
+`plugin.h`/`ecs.h`, a session singleton, peer/input components, and
+poll/send/session systems built only on public Afterhours APIs.
+
+Pumpkin Beachball is therefore both the first consumer and the de
+facto reference integration. A second game would copy its session,
+peer mapping, handshake state, remote-intent latching, cleanup, and
+status plumbing.
+
+Decision needed: build that optional ECS adapter, or explicitly keep
+this repository transport-only and stop describing it as an ECS
+plugin. The adapter should live in its own header so `core.h` remains
+dependency-free.
+
+### 6. Snapshot sampling and send pacing are repeated by consumers
+
+The library provides transport, serialization, a sequence envelope for
+tests, and fault injection. It does not provide the pieces every
+snapshot game needs next:
+
+- a bounded snapshot buffer sampled at a configurable delay;
+- stale/duplicate/out-of-order accounting for application snapshots;
+- an adaptive interpolation delay based on arrival jitter;
+- a wall-clock rate gate for inputs, snapshots, or probes;
+- input acknowledgement or redundancy helpers for one-frame edges.
+
+Keep schemas, authority, movement prediction, and reconciliation in
+the game. The missing reusable boundary is timing and buffer
+bookkeeping, not a universal snapshot type.
+
+### 7. Distribution is still a local macOS/Homebrew build
+
+`scripts/build-gns.sh` is the only acquisition path. It clones GNS
+`v1.6.1`, assumes CMake and Homebrew protobuf/Abseil/OpenSSL paths,
+and builds on the developer machine. There is no CI workflow, release
+tag, published per-platform artifact, checksum file, or verified
+`fetch-gns.sh`.
+
+The resulting GNS archive is static, but Homebrew protobuf and Abseil
+still link dynamically on the current dev machine. A shipped game
+must inspect its final binary rather than assume the archive made the
+whole dependency chain static.
+
+Release work still needed:
+
+1. CI builds with fully static protobuf/Abseil/OpenSSL where the
+   platform permits it.
+2. Versioned release assets and SHA256 sums.
+3. A fetch script that selects the current OS/arch and fails clearly
+   when no artifact exists.
+4. A fresh-clone job that fetches, compiles the core and GNS tests,
+   and runs loopback tests without building GNS from source.
+5. A top-level `LICENSE` for this repository. The only license file in
+   a built checkout today belongs to the downloaded GNS tree under
+   ignored `vendor/gns/`; it does not license afterhours-online.
+6. A compatibility table: library revision, tested Afterhours
+   revision, GNS/interface version, OS/arch, and compiler.
+
+### 8. The Steam sharing seam needs a bootstrap refactor
+
+There is no Steamworks backend yet. More importantly, the shared
+implementation is not quite backend-agnostic today:
+`gns_acquire()` calls the standalone init/kill functions and
+`SteamNetworkingSockets_LibV12()` itself, despite the file header
+saying the including translation unit hands it an interface pointer.
+
+Split acquisition/lifetime from connection logic before adding
+`steam.cpp`. Each backend TU should own init, shutdown, utils access,
+and accessor selection. Add an SDK-gated or fake-interface compile
+check so the seam cannot silently hardcode the standalone path again.
+
+### 9. Session admission is accept-first, game-reject-later
+
+The GNS server accepts a connection during the Connecting callback if
+capacity remains. Identity, password, role, and game-version checks
+can only happen after the game receives its first application packet.
+That is workable for a small trusted game, but the library exposes no
+pre-accept policy hook, connection user data, or structured rejection
+reason for consumers that need one.
+
+This is not a call to put game passwords in the transport. It is a
+missing extension point: a consumer callback could inspect native
+connection info (and later an application hello) and accept, reject,
+or park the connection without forking `gns_impl.h`.
+
+## Future scope, not current defects
+
+- NAT hole punching, relay, room codes, and rendezvous.
+- Steamworks/SDR, lobbies, friends/identity, and matchmaking.
+- Rollback/lockstep. The demonstrated model is authoritative snapshots.
+- More than the GNS backend's current four remote peers.
+- A second real consumer. Until one adopts the library, its API has
+  only been proven against a two-player, full-snapshot game.
+
+## Test evidence limits
+
+Covered: codec/local units, a 24-scenario transport contract matrix
+over Local and real GNS loopback, fault injection above the transport,
+and Pumpkin Beachball's multi-process game scenarios.
+
+Not covered: another physical machine, a real LAN or public internet
+path, NAT and firewall behavior, Windows/Linux artifacts, UDP loss
+below GNS retransmission, Steam, and hours-long server soak. The
+detailed playbook and current XFAIL semantics stay in
+`docs/e2e-testing.md`.
+
+## Checked: not gaps
+
+- Channels map to distinct GNS send flags; no path silently upgrades
+  everything to reliable.
+- Peer IDs are allocated by the server transport, and a client remains
+  invalid until the game handshake teaches it the assigned ID. That is
+  documented behavior, not a missing ID.
+- LocalTransport/GNS differences are represented as backend
+  capabilities in the contract runner instead of scattered `#ifdef`s.
+- The core really is header-only and does not leak GNS or Steam
+  headers. Only consumers that add `gns.cpp` pay the backend link.
+- The game label hash is a compatibility guard only. It was never an
+  authentication mechanism, and the source says so.
+
+## Maintenance rule
+
+When a gap closes, change its status in place, name the commit, and
+name the test that proves it. If an item becomes an accepted permanent
+boundary, move it to future scope or record the decision where the
+evidence is. Do not let `XFAIL` become the only place a behavior is
+documented.
+

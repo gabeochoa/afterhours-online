@@ -174,6 +174,12 @@ harnesses above defuse each one:
   host can observe a score and exit before the next snapshot reaches the
   guest. Scripts that drive shared state need a trailing wait after their
   final assertion so peers can observe the same state before teardown.
+- **Frame counts are not wall time.** Headless clients can burn scripted
+  frames far faster than a real-time dedicated server advances, while real
+  windows are vsync-paced. Give score/state waits enough wall-clock margin
+  and keep process timeouts above the slowest expected frame burn; a
+  too-short wait reports the old state, and a too-long wait can itself hit
+  the harness deadline under load.
 - **Graceful vs ungraceful death.** `close()`, process exit through cleanup,
   `terminate`, and `kill` produce different wire behavior. Scenarios should
   name which one they mean; "server exits" (timed, graceful) and
@@ -205,6 +211,8 @@ harnesses above defuse each one:
 
 - `--scenario` / `--all` / `--list`, `--repeat`, `--fail-fast`
 - `--exe`, `--probe` to point at alternate builds
+- `--windowed` with `--windowed-exe` registers real-window client
+  scenarios; they need a live display and write per-process screenshots
 - `--port` (0 = dynamic per scenario), `--timeout`, `--startup-timeout`
 - `--characters LEFT,RIGHT`, `--probe-modes`, `--hello-delay-ms`,
   `--input-count`, `--server-seconds`, `--server-exit-seconds`
@@ -213,7 +221,10 @@ harnesses above defuse each one:
 Scenarios cover dedicated and listen-host topologies, sequential / reverse /
 simultaneous joins, third-client rejection, unreachable and unparseable
 addresses, port conflicts, graceful server exit, client leave + replacement,
-same-process rejoin, and the raw-probe handshake matrix.
+same-process rejoin, and the raw-probe handshake matrix. They also include a
+menu-driven headless match (real Online menu, typed join target, character
+ready-up) and, under `--windowed`, dedicated and listen-host matches in two
+real client windows.
 
 ## Suggested CI tiers
 
@@ -222,6 +233,7 @@ same-process rejoin, and the raw-probe handshake matrix.
 | Fast | `online-e2e-test --backend=local` + core unit test | Every change; no GNS build needed |
 | Real transport | `online-e2e-gns-test --backend=both` | Every change on a runner with the static GNS build |
 | Game smoke | `online_e2e.py` (default scenarios) | Every change touching netcode or the game protocol |
+| Windowed game | `online_e2e.py --windowed --scenario dedicated_windowed,listen_windowed` | Display-equipped runner or manual pre-release check; validates real rendering plus networking |
 | Full matrix | `online_e2e.py --all` | Nightly or pre-release; several minutes of real time |
 | Soak | `online-e2e-gns-test --repeat 5 --fault-profile chaos` | Nightly; watch for new `FAIL`s and shrinking `XFAIL`s |
 

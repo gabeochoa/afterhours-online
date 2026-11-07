@@ -37,9 +37,9 @@ caveat: `libGameNetworkingSockets_s.a` is static, but Homebrew ships no
 static protobuf/Abseil, so local builds still link those as dylibs; the
 release pipeline should build protobuf statically too (see script header).
 
-`pumpkin-beachball` (Slime Volleyball) is the first consumer. This folder is
-kept self-contained so it can be split into its own repository without
-changing the public header surface.
+`pumpkin-beachball` (Slime Volleyball) is the first consumer. This is its
+own repository, vendored into that game as a submodule; keeping it
+self-contained preserves the same public header surface either way.
 
 ## Testing
 
@@ -56,3 +56,9 @@ changing the public header surface.
 
 See `docs/e2e-testing.md` for the full layered strategy, every runner
 option, the setup/failure-mode playbook, and suggested CI tiers.
+
+## Known gaps
+
+`docs/gaps.md` is the maintained list of library-level gaps, release
+work, test-evidence limits, and future scope. Update it in the same
+change whenever behavior closes or changes one of its entries.
