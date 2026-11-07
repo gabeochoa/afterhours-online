@@ -396,8 +396,10 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
           conn_to_peer.erase(it);
         }
       } else if (info->m_hConn == client_conn) {
-        if (client_connected)
-          pending.emplace_back(Disconnected{kServerPeer});
+        // A connection attempt can end before Connected is delivered.
+        // That is still terminal for the caller; without this event it
+        // has no way to distinguish failure from a slow connection.
+        pending.emplace_back(Disconnected{kServerPeer});
         client_connected = false;
         client_conn = k_HSteamNetConnection_Invalid;
       }

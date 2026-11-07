@@ -28,11 +28,16 @@ it previously reached `Connected`. An unreachable endpoint can
 therefore leave a consumer waiting forever unless the game adds its
 own deadline and cancellation UI.
 
-The transport matrix records this as `connect_without_server` XFAIL.
-Close it by synthesizing exactly one terminal event for a client
-connection that ends before `Connected`, including the case where the
-connection was never fully established. Local `close()` and
-`disconnect()` must not double-report.
+Resolution (2026-11-05): closed. The GNS client now queues
+`Disconnected{kServerPeer}` when its connection reaches a closed/problem
+state before `Connected`; local close paths unregister the connection
+first, so they do not synthesize a second event. A loopback probe
+observed GNS's own initial timeout event at 10.012 seconds, and
+`connect_without_server` now waits up to 12 seconds and expects the
+event under `--strict-gaps`. Games that want a shorter UX deadline
+should still impose their own; Pumpkin Beachball uses 12 seconds of
+frame dt as a backstop for endpoints that accept the transport
+connection but never complete the game handshake.
 
 ### 2. Capacity rejection is silent at the transport layer
 
@@ -47,9 +52,11 @@ message after Hello, as Pumpkin Beachball does for its third player,
 but that does not help a fifth transport peer or another consumer
 whose game cap equals the backend cap.
 
-Close it with the same terminal-event guarantee as item 1. If events
-gain reasons, capacity rejection should be distinguishable from an
-unreachable endpoint.
+Resolution (2026-11-05): closed for the terminal-event guarantee.
+The rejected client now receives `Disconnected{kServerPeer}` from its
+own closed connection, and `capacity_and_extra_client` expects it
+under `--strict-gaps`. Distinguishing capacity rejection from other
+closes still needs the reason field in item 3.
 
 ### 3. Disconnect reasons and connection stats stay inside GNS
 

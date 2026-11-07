@@ -527,15 +527,19 @@ static void scenario_connect_without_server(TestContext &ctx, Driver &driver) {
 
   ctx.expect(started, "socket backend starts asynchronous connect");
   EventPump pump(std::vector<NamedEndpoint>{{"client", endpoint.get()}});
-  pump.pump_for(750, ctx.options.poll_ms);
+  // GNS uses a 10-second initial connection timeout on this platform.
+  // Wait for the terminal event instead of sampling an arbitrary short
+  // window in which a still-connecting endpoint looks identical.
+  const bool disconnected = pump.pump_until(
+      [](const std::vector<RecordedEvent> &log) {
+        return online_testing::has_disconnected(log, "client", kServerPeer);
+      },
+      12000, ctx.options.poll_ms);
   const bool connected =
       online_testing::has_connected(pump.log(), "client", kServerPeer);
-  const bool disconnected =
-      online_testing::has_disconnected(pump.log(), "client", kServerPeer);
   ctx.expect(!connected, "unreachable client does not report connected");
-  ctx.gap(disconnected,
-          "unreachable client receives a terminal Disconnected event promptly; "
-          "games currently need their own connect timeout");
+  ctx.expect(disconnected,
+             "unreachable client receives a terminal Disconnected event");
   ctx.note("unreachable observation: connected=" + std::to_string(connected) +
            " disconnected=" + std::to_string(disconnected));
   endpoint->close();
@@ -780,9 +784,9 @@ static void scenario_capacity_and_extra_client(TestContext &ctx, Driver &driver)
   ctx.expect(!online_testing::has_connected(session.log(), endpoint_name(extra),
                                             kServerPeer),
              "extra client is not welcomed at transport level");
-  ctx.gap(online_testing::has_disconnected(session.log(), endpoint_name(extra),
-                                           kServerPeer),
-          "capacity-rejected client receives an explicit terminal event");
+  ctx.expect(online_testing::has_disconnected(session.log(), endpoint_name(extra),
+                                              kServerPeer),
+             "capacity-rejected client receives an explicit terminal event");
   ctx.require(send_text(session.client(0), kServerPeer, "capacity-survivor"),
               "accepted client still sends after rejection");
   ctx.expect(wait_for_packet(session, "server", "capacity-survivor").has_value(),

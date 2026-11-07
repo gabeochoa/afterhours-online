@@ -117,14 +117,12 @@ harness is the place to add it.
   by default; `--strict-gaps` makes it red. This keeps gaps visible in every
   CI log without either hiding them or blocking unrelated work.
 
-Current `XFAIL`s on GNS, both from the same root cause (a client connection
-that ends before `Connected` is delivered produces no terminal event):
-
-- `connect_without_server` — no prompt failure event for an unreachable
-  endpoint; games currently need their own connect timeout.
-- `capacity_and_extra_client` — a capacity-rejected client gets no explicit
-  terminal event at the transport layer. (At the game layer, Pumpkin
-  Beachball's own "match full" Bye covers the two-player case.)
+There are currently no `XFAIL`s on GNS. The two former early-close gaps
+(`connect_without_server` and `capacity_and_extra_client`) closed on
+2026-11-05: a client connection that ends before `Connected` now queues
+exactly one terminal `Disconnected` event. GNS's unreachable-endpoint
+timeout is about 10 seconds on this platform, so games that want a
+shorter or handshake-specific deadline still need their own timer.
 
 ## Backend differences are data, not `#ifdef`s
 
@@ -135,7 +133,7 @@ scenarios assert the portable parts unconditionally and branch only on caps:
 | Behavior | Local | GNS |
 | --- | --- | --- |
 | Client peer id | Assigned inside `connect()` | Invalid until the game learns it from its Welcome |
-| Connect with no server | `connect()` returns false | Async; see `XFAIL` above |
+| Connect with no server | `connect()` returns false | Async; terminal `Disconnected` after GNS initial timeout (~10 s here) |
 | Client → client send | Routed directly by the hub | Server-bound; the peer argument does not select a client |
 | Client broadcast | Reaches server and clients | Reaches the server only |
 | Received `UnreliableNoDelay` label | Preserved | Reported as `Unreliable` (GNS message flags only expose reliable) |
