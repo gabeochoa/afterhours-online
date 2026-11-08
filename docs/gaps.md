@@ -179,6 +179,87 @@ missing extension point: a consumer callback could inspect native
 connection info (and later an application hello) and accept, reject,
 or park the connection without forking `gns_impl.h`.
 
+### 10. Serialization strategy is not settled: hand codec or zpp::bits
+
+Status: decision/spike needed. This is not yet a defect in the
+current two-player protocol.
+
+Why `serialize.h` exists today:
+
+- The transport contract is opaque bytes. The library needed a tiny,
+  dependency-free way for tests and consumers to put integers, floats,
+  bools, and strings on the wire without adopting a schema framework.
+- Its layout is explicit and stable: little-endian primitives,
+  length-prefixed strings, and readers that return `nullopt` when the
+  buffer is short. Packet layouts remain visible in each game's
+  encode/decode functions, and raw-probe tools can inspect them.
+- It is only about 145 lines and has no third-party header, template
+  archive, or warning-suppression wrapper to carry into every game.
+
+Why zpp::bits is attractive:
+
+- Pharmasea already uses it for variant packets and, more importantly,
+  entity/world snapshot blobs. It removes repetitive field-by-field
+  code once schemas contain nested structs, containers, variants,
+  bitsets, or component masks.
+- It returns `std::errc` instead of throwing across the network
+  boundary, and it can be configured for explicit little-endian I/O.
+
+Why replacing `serialize.h` wholesale is not an obvious win today:
+
+- Pharmasea's vendored header is about 5,713 lines and needs a local
+  clang `-Wshadow` suppression wrapper in that project.
+- Default zpp::bits archives are native-endian. Every archive in a
+  wire protocol must deliberately use `zpp::bits::endian::little`;
+  forgetting it changes the bytes by host.
+- It does not make wire evolution free. Field order, enum order,
+  container encodings, and archive options are still protocol
+  contracts and still need golden-byte tests.
+- Pumpkin Beachball currently has seven small, fixed-layout game
+  messages. The hand codec's call sites are short, exact-length
+  checked, and already covered by unit and hostile-packet tests.
+
+Recommendation: keep `serialize.h` as the low-level stable wire
+primitive for transport/simple game packets. Do not migrate the
+existing protocol only to save a few field writes. Reconsider
+zpp::bits at the snapshot/ECS layer, where nested component data is
+the actual problem. Before adopting it, run a spike on Hello, Input,
+and Snapshot and compare:
+
+1. golden bytes and malformed/truncated-input behavior;
+2. explicit little-endian configuration at every archive site;
+3. call-site size and readability against the current codec;
+4. compile time and warnings under `-Werror`;
+5. multi-translation-unit/include behavior;
+6. vendoring, license, and version-pinning cost.
+
+### 11. The public headers do not read like an Afterhours plugin
+
+Status: design/style decision needed; do not fix by formatting alone.
+
+The mismatch is structural, not just indentation:
+
+- Afterhours features are usually a lowercase plugin struct inheriting
+  `developer::Plugin`, with nested `Provides*`/`Has*` components,
+  static singleton registration, and systems. `online/core.h` is a
+  conventional abstract `Transport` class with virtual methods,
+  standalone event structs, and free helper functions.
+- Afterhours headers are commonly dense, implementation-heavy headers
+  built around `BaseComponent`, `Entity`, `SystemManager`, concepts,
+  and project type aliases. The online core intentionally uses only
+  standard-library types and says it has no ECS dependency.
+- There is no `.clang-format` in either checkout to settle the visible
+  differences (including this repo's two-space style versus the
+  four-space style used through much of the pinned Afterhours tree).
+
+Recommended direction: keep `core.h` as the neutral transport contract
+and put the Afterhours-native surface in the optional ECS adapter from
+item 5. That adapter should follow the pinned library's plugin shape.
+A repository-wide reformat of stable transport headers would create a
+large diff without making the API feel integrated. If the ECS layer is
+formally rejected instead, rename the expectation in the README/plan
+from "plugin" to "transport library" and then align only new code.
+
 ## Future scope, not current defects
 
 - NAT hole punching, relay, room codes, and rendezvous.

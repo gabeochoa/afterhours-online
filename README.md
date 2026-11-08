@@ -32,7 +32,9 @@ never compile or link it.
 
 Server allocates peer ids (`kServerPeer`, then `kFirstRemotePeer` up, cap
 4); a client's local id stays invalid until the game handshake calls
-`set_local_peer_id`. Channels map 1:1 to GNS send flags. Known dev-machine
+`set_local_peer_id`. Channels map 1:1 to GNS send flags. For how the
+backend works inside (callback routing, poll order, close paths), see
+`docs/gns-internals.md`. Known dev-machine
 caveat: `libGameNetworkingSockets_s.a` is static, but Homebrew ships no
 static protobuf/Abseil, so local builds still link those as dylibs; the
 release pipeline should build protobuf statically too (see script header).

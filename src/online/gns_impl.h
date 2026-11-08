@@ -1,10 +1,22 @@
 #pragma once
 
 // GNS transport implementation. Included ONLY by gns.cpp (one TU per
-// game that opts into GNS), never by game code. The standalone-vs-Steam
-// choice lives in that .cpp: it defines its own access macro and hands
-// this file an ISteamNetworkingSockets* (LibV12 here; a future steam.cpp
-// can pass the SteamAPI accessor to the same implementation).
+// game that opts into GNS), never by game code.
+//
+// Start with docs/gns-internals.md for the guided tour. In short:
+// detail:: owns the process-wide GNS lifetime and the two registries
+// that route GNS's one global status callback back to the Impl that
+// owns a handle. Impl is one endpoint (server XOR client); it turns
+// GNS listen/poll-group/message APIs into portable Events queued in
+// `pending`, and turns portable PeerIds back into native connection
+// handles on send. Read listen/connect, then poll/drain_messages,
+// then on_status_changed, then close/disconnect last (ordering bugs
+// live in what gets unregistered before a native close).
+//
+// Known seam (docs/gaps.md item 8): acquisition below currently calls
+// the standalone LibV12 accessor itself. The connection logic after
+// acquisition is the part a future steam.cpp should share once each
+// backend TU owns its own init/accessor choice.
 //
 // Model follows Pharmasea's internal GNS server/client (listen socket +
 // poll group on the server, single connection on the client, status
