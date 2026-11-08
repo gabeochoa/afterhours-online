@@ -260,6 +260,33 @@ large diff without making the API feel integrated. If the ECS layer is
 formally rejected instead, rename the expectation in the README/plan
 from "plugin" to "transport library" and then align only new code.
 
+### 12. `gns_impl.h` is still dense for a first-time maintainer
+
+Status: partially mitigated on 2026-11-05; remaining work is tied to
+the Steam bootstrap refactor in item 8.
+
+The file is about 510 lines because several different jobs share one
+impl: process-wide GNS lifetime, two global callback registries, one
+endpoint that can act as either server or client, native-handle maps,
+message copying, disconnect-reason mapping, stats, and the GNS state
+machine. The global callback and the two inverse server maps are the
+parts most likely to stop a first-time reader.
+
+Mitigation already in place:
+
+- `docs/gns-internals.md` walks the file in runtime order: lifetime,
+  callback routing, server accept, client connect, send, poll/drain,
+  and the three close paths.
+- The header now opens with the same reading order and labels the
+  process-wide state, callback fall-back, endpoint role, server maps,
+  poll ordering, and lifecycle translation at the relevant code.
+
+Do not split the file only to make it look smaller. The meaningful
+remaining decomposition is the item 8 bootstrap split: backend
+acquisition out, shared connection logic in. If that refactor cannot
+make the ownership and callback route obvious without the guide,
+revisit separating lifetime/registry state from endpoint logic then.
+
 ## Future scope, not current defects
 
 - NAT hole punching, relay, room codes, and rendezvous.

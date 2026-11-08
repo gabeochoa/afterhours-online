@@ -38,6 +38,7 @@
 
 namespace afterhours::online::detail {
 
+// Process-wide GNS state lives here, before the per-endpoint Impl below.
 // One process-wide GNS lifetime, refcounted across transports so a
 // loopback test can run a server and a client in the same process.
 inline int &gns_refcount() {
@@ -135,6 +136,10 @@ inline std::map<HSteamNetConnection, GnsImplBase *> &gns_conn_registry() {
   return *registry;
 }
 
+// GNS reports lifecycle through this one C callback. A known connection
+// routes directly to its owner; a brand-new inbound connection has no
+// PeerId or connection-registry entry yet, so it falls back to the Impl
+// that owns its listen socket.
 inline void
 gns_status_callback(SteamNetConnectionStatusChangedCallback_t *info) {
   if (auto it = gns_conn_registry().find(info->m_hConn);
@@ -154,6 +159,8 @@ gns_status_callback(SteamNetConnectionStatusChangedCallback_t *info) {
 
 namespace afterhours::online {
 
+// One endpoint. Whichever of listen()/connect() succeeds fixes its role;
+// the unused role's native handles stay invalid.
 struct GnsTransport::Impl final : detail::GnsImplBase {
   static constexpr std::size_t kMaxPeers = 4;
 
@@ -168,6 +175,9 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
   HSteamNetConnection client_conn = k_HSteamNetConnection_Invalid;
   bool client_connected = false;
 
+  // Server-only translation in both directions: inbound callbacks and
+  // messages resolve a native handle to PeerId; outbound calls resolve
+  // the PeerId a game supplied back to the native handle.
   std::map<HSteamNetConnection, PeerId> conn_to_peer;
   std::map<PeerId, HSteamNetConnection> peer_to_conn;
   PeerId next_peer = kFirstRemotePeer;
@@ -371,6 +381,8 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
     return stats;
   }
 
+  // Order matters: callbacks first (lifecycle), messages second, then
+  // return just the oldest queued Event. Callers loop until empty.
   std::optional<Event> poll() {
     if (!open || iface == nullptr)
       return std::nullopt;
@@ -425,6 +437,8 @@ struct GnsTransport::Impl final : detail::GnsImplBase {
     }
   }
 
+  // Translate one GNS lifecycle change into portable state/events. This
+  // is also the only place a server allocates a new PeerId.
   void
   on_status_changed(SteamNetConnectionStatusChangedCallback_t *info) override {
     if (iface == nullptr)
