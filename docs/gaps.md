@@ -181,8 +181,9 @@ or park the connection without forking `gns_impl.h`.
 
 ### 10. Serialization strategy is not settled: hand codec or zpp::bits
 
-Status: decision/spike needed. This is not yet a defect in the
-current two-player protocol.
+Status: spike done 2026-11-05; decision is keep the hand codec for
+now (measured results at the end of this item). This is not a defect in
+the current two-player protocol.
 
 Why `serialize.h` exists today:
 
@@ -219,19 +220,30 @@ Why replacing `serialize.h` wholesale is not an obvious win today:
   messages. The hand codec's call sites are short, exact-length
   checked, and already covered by unit and hostile-packet tests.
 
-Recommendation: keep `serialize.h` as the low-level stable wire
-primitive for transport/simple game packets. Do not migrate the
-existing protocol only to save a few field writes. Reconsider
-zpp::bits at the snapshot/ECS layer, where nested component data is
-the actual problem. Before adopting it, run a spike on Hello, Input,
-and Snapshot and compare:
+Spike result (2026-11-05, standalone program against Pharmasea's
+vendored zpp::bits, wire order preserved):
 
-1. golden bytes and malformed/truncated-input behavior;
-2. explicit little-endian configuration at every archive site;
-3. call-site size and readability against the current codec;
-4. compile time and warnings under `-Werror`;
-5. multi-translation-unit/include behavior;
-6. vendoring, license, and version-pinning cost.
+- Hello (10 B), Input (14 B), Snapshot (69 B), and Bye (15 B) encoded
+  byte-identical to the hand codec, and zpp decoded the hand codec's
+  bytes. Even the string length prefix matched (this zpp version's
+  default string size is 32-bit). A migration could therefore keep the
+  current wire format and game hash if every archive is careful.
+- The costs the spike confirmed: endian safety needs a conditional
+  native/swapped archive alias plus an option *instance* at each
+  construction (there is no clean `endian::little` archive spelling);
+  the header fails this project's `-Wshadow -Werror` without the same
+  suppression wrapper Pharmasea uses; exact-length and semantic range
+  checks still belong to the caller (zpp accepted a bool byte of 2 as
+  false where the hand codec rejects it). Truncated input and a fake
+  4 GiB string length were both rejected without allocating.
+- Indicative compile cost on this machine: the both-codecs spike TU
+  took 2.0 s vs 1.2 s for a current-codec-only TU.
+
+Decision: keep `serialize.h` for the existing fixed-layout protocol.
+The saving over the current encode/decode pairs is small, and the
+dependency plus wrapper is permanent. Re-run this comparison when
+ECS/world-snapshot data (item 5) becomes the real serialization load;
+that is the layer zpp::bits is for.
 
 ### 11. The public headers do not read like an Afterhours plugin
 
