@@ -181,9 +181,10 @@ or park the connection without forking `gns_impl.h`.
 
 ### 10. Serialization strategy is not settled: hand codec or zpp::bits
 
-Status: spike done 2026-11-05; decision is keep the hand codec for
-now (measured results at the end of this item). This is not a defect in
-the current two-player protocol.
+Status: spike done and adopted 2026-11-05 for the game's wire
+messages (byte-identical; measured results at the end of this item).
+The hand codec remains for primitives and the testing envelope. This
+was not a defect in the two-player protocol.
 
 Why `serialize.h` exists today:
 
@@ -244,6 +245,17 @@ The saving over the current encode/decode pairs is small, and the
 dependency plus wrapper is permanent. Re-run this comparison when
 ECS/world-snapshot data (item 5) becomes the real serialization load;
 that is the layer zpp::bits is for.
+
+Update (same day): adopted anyway, at the user's direction.
+zpp::bits is vendored under `src/online/third_party/zpp_bits/` (MIT,
+with its LICENSE) behind the single include point
+`src/online/zpp_serialize.h`, which pins little-endian archives and
+the clang `-Wshadow` suppression. Pumpkin Beachball's game packets
+moved onto it byte-identically, guarded by golden-byte unit tests for
+all seven message types; `serialize.h` stays for the testing sequence
+envelope and consumers that want primitive control. The spike's
+caveats stand: semantic range checks are the caller's, and any future
+archive site must use the wrapper, never a default-endian archive.
 
 ### 11. The public headers do not read like an Afterhours plugin
 

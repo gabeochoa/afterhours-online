@@ -10,6 +10,7 @@ flag, Steamworks, or GNS to a build.
 | --- | --- |
 | `src/online/core.h` | `Transport`, peer IDs, channels, packets, events |
 | `src/online/serialize.h` | Tiny explicit little-endian packet `Writer` / `Reader` |
+| `src/online/zpp_serialize.h` | One include point for vendored zpp::bits: little-endian `WireOut` / `WireIn` archives for struct-level wire messages |
 | `src/online/local.h` | In-process server/client transport for single-player and tests |
 | `src/online/online.h` | Convenience include for all of the above |
 | `src/online/testing.h` | Optional test support: event pump/matchers, sequence envelope, fault-injecting transport decorator |
