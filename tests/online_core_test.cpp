@@ -127,6 +127,18 @@ static void test_local_disconnect_peer() {
                    d->reason == DisconnectReason::ClosedByPeer;
   }
   expect(client_saw, "dropped client sees a closed-by-peer disconnect");
+
+  // Regression (R-185): a dropped idle client's own close() must not
+  // announce the same peer to the server a second time.
+  client.close();
+  int extra_disconnects = 0;
+  while (auto event = server.poll()) {
+    if (std::get_if<Disconnected>(&*event))
+      ++extra_disconnects;
+  }
+  expect(extra_disconnects == 0,
+         "dropped client's close does not re-announce its disconnect");
+  expect(!client.is_open(), "dropped client is closed after close()");
 }
 
 static void test_testing_sequence_envelope() {

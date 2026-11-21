@@ -20,6 +20,7 @@ struct LocalHub {
   struct Inbox {
     std::mutex mutex;
     std::deque<Event> events;
+    bool removed = false; // dropped by a peer: a later close() must not re-announce it
   };
 
   mutable std::mutex mutex;
@@ -81,7 +82,14 @@ public:
       if (server_)
         hub_->has_server = false;
     }
-    notify_all(Disconnected{closing, DisconnectReason::ClosedByPeer}, closing);
+    bool announce = true;
+    if (inbox_) {
+      std::lock_guard lock(inbox_->mutex);
+      announce = !inbox_->removed;
+    }
+    if (announce)
+      notify_all(Disconnected{closing, DisconnectReason::ClosedByPeer},
+                 closing);
     inbox_.reset();
     local_id_ = kInvalidPeer;
     server_ = false;
@@ -104,6 +112,7 @@ public:
     // so the event is still deliverable after hub removal.
     {
       std::lock_guard lock(dropped->mutex);
+      dropped->removed = true;
       dropped->events.emplace_back(
           Disconnected{local_id_, DisconnectReason::ClosedByPeer});
     }
