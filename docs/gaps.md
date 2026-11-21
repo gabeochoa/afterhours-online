@@ -124,6 +124,15 @@ Keep schemas, authority, movement prediction, and reconciliation in
 the game. The missing reusable boundary is timing and buffer
 bookkeeping, not a universal snapshot type.
 
+Update (gap/online-session-layer, draft): the timing/buffer half
+landed as headers, unit-tested in `tests/online_core_test.cpp`:
+`snapshot.h` (`SnapshotBuffer<T>` with bounded capacity, fixed-delay
+sampling, stale/duplicate accounting, no extrapolation;
+`RateGate`/`gate_for_hz` wall-clock pacing) and `codec.h` (typed-packet
+codec, OG-18). Still open from this item: an adaptive interpolation
+delay based on arrival jitter, and input acknowledgement helpers.
+DNS resolution (item 4) remains unimplemented by design in this change.
+
 ### 7. Distribution is still a local macOS/Homebrew build
 
 `scripts/build-gns.sh` is the only acquisition path. It clones GNS
