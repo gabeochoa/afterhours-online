@@ -16,6 +16,8 @@ flag, Steamworks, or GNS to a build.
 | `src/online/testing.h` | Optional test support: event pump/matchers, sequence envelope, fault-injecting transport decorator |
 | `src/online/snapshot.h` | `SnapshotBuffer<T>` interpolation buffer (stale/duplicate accounting, no extrapolation) and wall-clock `RateGate` send pacing |
 | `src/online/codec.h` | Typed-packet codec over zpp::bits: type byte first, validated on decode, exact exhaustion required |
+| `src/online/endpoint.h` | `parse_endpoint`/`format_endpoint` (syntax-only contract, see header), `ConnectAttempt` deadline/status UX, per-peer `RttTracker`, `EdgeLatch` for unreliable inputs |
+| `src/online/session.h` | Session adapter seam: `PeerBook<Side>` assignment bookkeeping and `SessionDriver` event pump (ECS-free; see header for the proposed adapter decision) |
 
 Backends that need a real library (standalone GNS first, Steamworks later)
 are intentionally **opt-in**: a game that wants one adds that backend's one

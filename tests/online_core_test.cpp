@@ -201,7 +201,7 @@ static void test_testing_fault_transport() {
          "corrupted sequence packet is rejected");
 }
 
-// ---- gap/online-session-layer: snapshot, codec ----
+// ---- gap/online-session-layer: snapshot, codec, endpoint, session ----
 
 namespace session_layer_test {
 struct Snap {
@@ -279,10 +279,125 @@ static void test_typed_codec() {
          "typed codec peek rejects empty input");
 }
 
+static void test_endpoint_and_connect_helpers() {
+  using namespace std::chrono_literals;
+  const auto plain = parse_endpoint("  example.local ", 7777);
+  expect(plain && plain->host == "example.local" && plain->port == 7777 &&
+             !plain->ipv6_literal,
+         "endpoint: bare host gets default port");
+  const auto with_port = parse_endpoint("192.168.1.5:27015", 7777);
+  expect(with_port && with_port->port == 27015, "endpoint: host:port");
+  const auto v6 = parse_endpoint("[2001:db8::1]:9999", 7777);
+  expect(v6 && v6->ipv6_literal && v6->host == "2001:db8::1" &&
+             v6->port == 9999 &&
+             format_endpoint(*v6) == "[2001:db8::1]:9999",
+         "endpoint: bracketed IPv6 round-trips");
+  expect(!parse_endpoint("2001:db8::1", 7777),
+         "endpoint: unbracketed IPv6 rejected");
+  expect(!parse_endpoint("bad host!", 7777), "endpoint: bad chars rejected");
+  expect(!parse_endpoint("host:0", 7777), "endpoint: port zero rejected");
+  expect(!parse_endpoint("host:99999", 7777),
+         "endpoint: oversize port rejected");
+  expect(!parse_endpoint("", 7777), "endpoint: empty rejected");
+
+  ConnectAttempt attempt{12s};
+  const auto t0 = ConnectAttempt::Clock::time_point{} + 1s;
+  attempt.begin(t0);
+  attempt.note_hello_sent();
+  expect(!attempt.poll(t0 + 11s), "connect attempt alive before deadline");
+  const auto timeout = attempt.poll(t0 + 12s);
+  expect(timeout && *timeout == "Connect failed: no welcome from server",
+         "connect attempt deadline maps to welcome timeout");
+  attempt.begin(t0);
+  const auto rejected = attempt.note_disconnected(DisconnectReason::Rejected);
+  expect(rejected && *rejected == "Connect failed: server full",
+         "connect attempt maps rejection to server full");
+  attempt.begin(t0);
+  attempt.note_welcomed();
+  expect(!attempt.note_disconnected(DisconnectReason::ClosedByPeer),
+         "welcomed disconnect is not a connect failure");
+
+  RttTracker rtt;
+  rtt.note_ping(kFirstRemotePeer, 1, t0);
+  const auto sample = rtt.note_pong(kFirstRemotePeer, 1, t0 + 100ms);
+  expect(sample && *sample > 99.f && *sample < 101.f, "rtt sample measured");
+  expect(!rtt.note_pong(kFirstRemotePeer, 1, t0 + 100ms),
+         "duplicate pong ignored (first wins)");
+  const auto smoothed = rtt.rtt_ms(kFirstRemotePeer, t0 + 100ms);
+  expect(smoothed && *smoothed > 99.f, "rtt smoothed value present");
+  expect(!rtt.rtt_ms(kFirstRemotePeer, t0 + 10s), "rtt goes stale");
+
+  EdgeLatch latch;
+  latch.latch(false);
+  expect(!latch.peek(), "edge latch stays clear without press");
+  latch.latch(true);
+  latch.latch(false);
+  expect(latch.consume() && !latch.consume(),
+         "edge latch OR-latches until consumed");
+}
+
+static void test_session_driver() {
+  enum class Side { Left, Right };
+  struct Handler {
+    std::vector<std::string> log;
+    PeerBook<Side> *book = nullptr;
+    void on_connected(PeerId peer) {
+      log.push_back("connected " + std::to_string(peer));
+    }
+    void on_packet(const Packet &packet) {
+      log.push_back("packet " + std::string(view_bytes(packet.payload)));
+    }
+    void on_disconnected(PeerId peer, DisconnectReason,
+                         std::optional<Side> side) {
+      // Bookkeeping must already be freed when this runs.
+      log.push_back("disconnected " + std::to_string(peer) +
+                    (side ? " had-side" : " no-side") +
+                    (book && !book->side_of(peer) ? " freed" : " LEAK"));
+    }
+  };
+  auto hub = std::make_shared<LocalHub>();
+  LocalTransport server(hub);
+  expect(server.listen(7777), "session-test server listens");
+  LocalTransport client(hub);
+  expect(client.connect("local", 7777), "session-test client connects");
+
+  Handler handler;
+  SessionDriver<Side, Handler> driver(server, {Side::Left, Side::Right},
+                                      handler);
+  handler.book = &driver.book();
+  expect(driver.pump() >= 1, "driver pumps connect event");
+  const PeerId client_id = client.local_peer_id();
+  Side assigned = Side::Right;
+  expect(driver.book().assign(client_id, &assigned) ==
+                 PeerBook<Side>::AssignResult::Assigned &&
+             assigned == Side::Left,
+         "peer book assigns first free side");
+  expect(driver.book().assign(client_id) ==
+             PeerBook<Side>::AssignResult::AlreadyAssigned,
+         "peer book detects duplicate assign");
+  expect(client.send(kServerPeer, bytes_from("hi"), Channel::Reliable),
+         "session-test client sends");
+  driver.pump();
+  client.close();
+  driver.pump();
+  bool saw_packet = false, saw_freed_disconnect = false;
+  for (const auto &line : handler.log) {
+    saw_packet = saw_packet || line == "packet hi";
+    saw_freed_disconnect =
+        saw_freed_disconnect ||
+        line == "disconnected " + std::to_string(client_id) + " had-side freed";
+  }
+  expect(saw_packet, "driver delivers packet to handler");
+  expect(saw_freed_disconnect,
+         "driver frees side before disconnect callback");
+}
+
 int main() {
   test_codec();
   test_snapshot_buffer_and_rate_gate();
   test_typed_codec();
+  test_endpoint_and_connect_helpers();
+  test_session_driver();
   test_local_transport();
   test_local_disconnect_peer();
   test_testing_sequence_envelope();
