@@ -108,6 +108,15 @@ this repository transport-only and stop describing it as an ECS
 plugin. The adapter should live in its own header so `core.h` remains
 dependency-free.
 
+Update (gap/online-session-layer, draft): `src/online/session.h`
+proposes the seam without settling it: `PeerBook<Side>` (peer/side
+assignment, duplicate and capacity handling) and `SessionDriver`
+(transport pump in arrival order, bookkeeping freed before the
+game's disconnect callback), both ECS-free and unit-tested over
+LocalTransport. Owner decision still required: accept this seam and
+build the afterhours-native plugin on it, or reject the ECS layer
+and re-scope this repository as transport-only.
+
 ### 6. Snapshot sampling and send pacing are repeated by consumers
 
 The library provides transport, serialization, a sequence envelope for
@@ -128,10 +137,13 @@ Update (gap/online-session-layer, draft): the timing/buffer half
 landed as headers, unit-tested in `tests/online_core_test.cpp`:
 `snapshot.h` (`SnapshotBuffer<T>` with bounded capacity, fixed-delay
 sampling, stale/duplicate accounting, no extrapolation;
-`RateGate`/`gate_for_hz` wall-clock pacing) and `codec.h` (typed-packet
-codec, OG-18). Still open from this item: an adaptive interpolation
-delay based on arrival jitter, and input acknowledgement helpers.
-DNS resolution (item 4) remains unimplemented by design in this change.
+`RateGate`/`gate_for_hz` wall-clock pacing), `codec.h` (typed-packet
+codec, OG-18), and `endpoint.h` (`parse_endpoint`/`format_endpoint`
+with the syntax-only contract stated in the header, `ConnectAttempt`,
+per-peer `RttTracker`, `EdgeLatch`; OG-20..OG-23). Still open from
+this item: an adaptive interpolation delay based on arrival jitter,
+and input acknowledgement beyond the edge latch. DNS resolution
+(item 4) remains unimplemented by design in this change.
 
 ### 7. Distribution is still a local macOS/Homebrew build
 
