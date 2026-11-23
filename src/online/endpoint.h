@@ -157,10 +157,10 @@ class ConnectAttempt {
 public:
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
-  static constexpr std::chrono::seconds kDefaultDeadline{12};
+  static constexpr std::chrono::seconds DEFAULT_DEADLINE{12};
 
   explicit ConnectAttempt(
-      std::chrono::nanoseconds deadline = kDefaultDeadline)
+      std::chrono::nanoseconds deadline = DEFAULT_DEADLINE)
       : deadline_(deadline) {}
 
   void begin(TimePoint now) {
@@ -212,7 +212,7 @@ class RttTracker {
 public:
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
-  static constexpr std::chrono::seconds kDefaultStaleAfter{4};
+  static constexpr std::chrono::seconds DEFAULT_STALE_AFTER{4};
 
   void note_ping(PeerId peer, std::uint32_t seq, TimePoint now) {
     auto &pending = pending_[peer];
@@ -243,7 +243,7 @@ public:
   // Smoothed RTT for one peer, or nullopt with no fresh sample.
   [[nodiscard]] std::optional<float>
   rtt_ms(PeerId peer, TimePoint now,
-         std::chrono::nanoseconds stale_after = kDefaultStaleAfter) const {
+         std::chrono::nanoseconds stale_after = DEFAULT_STALE_AFTER) const {
     const auto it = peers_.find(peer);
     if (it == peers_.end() || !it->second.has_sample ||
         now - it->second.last_sample > stale_after)
