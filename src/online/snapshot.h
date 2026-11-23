@@ -38,39 +38,39 @@ public:
   using Clock = std::chrono::steady_clock;
   using TimePoint = Clock::time_point;
 
-  explicit RateGate(std::chrono::nanoseconds period) : period_(period) {}
+  explicit RateGate(std::chrono::nanoseconds period) : interval(period) {}
 
   // True (and records the send) at most once per period. The first
   // call after construction or reset() always succeeds, matching the
   // games' zero-initialized last-send timestamps.
   [[nodiscard]] bool try_take(TimePoint now) {
-    if (has_last_ && now - last_ < period_)
+    if (has_last && now - last < interval)
       return false;
-    last_ = now;
-    has_last_ = true;
+    last = now;
+    has_last = true;
     return true;
   }
   [[nodiscard]] bool try_take() { return try_take(Clock::now()); }
 
   // Forget the last send; the next try_take succeeds immediately.
-  void reset() { has_last_ = false; }
+  void reset() { has_last = false; }
 
-  void set_period(std::chrono::nanoseconds period) { period_ = period; }
-  [[nodiscard]] std::chrono::nanoseconds period() const { return period_; }
+  void set_period(std::chrono::nanoseconds period) { interval = period; }
+  [[nodiscard]] std::chrono::nanoseconds period() const { return interval; }
 
   // Time until the next allowed send (zero when one is due now).
   [[nodiscard]] std::chrono::nanoseconds remaining(TimePoint now) const {
-    if (!has_last_)
+    if (!has_last)
       return std::chrono::nanoseconds{0};
-    const auto elapsed = now - last_;
-    return elapsed >= period_ ? std::chrono::nanoseconds{0}
-                              : period_ - elapsed;
+    const auto elapsed = now - last;
+    return elapsed >= interval ? std::chrono::nanoseconds{0}
+                              : interval - elapsed;
   }
 
 private:
-  std::chrono::nanoseconds period_;
-  TimePoint last_{};
-  bool has_last_ = false;
+  std::chrono::nanoseconds interval;
+  TimePoint last{};
+  bool has_last = false;
 };
 
 // Convenience constructors for the rates games actually spell.
@@ -95,25 +95,25 @@ public:
     T value;
   };
 
-  explicit SnapshotBuffer(std::size_t capacity = 32) : capacity_(capacity) {}
+  explicit SnapshotBuffer(std::size_t capacity = 32) : capacity(capacity) {}
 
   // Store a snapshot. Returns false (and counts the reason) for a
   // stale or duplicate tick; the buffer is left unchanged.
   bool push(std::uint64_t tick, T value) {
-    if (!entries_.empty()) {
-      if (tick < entries_.back().tick) {
-        ++stale_;
+    if (!entries.empty()) {
+      if (tick < entries.back().tick) {
+        ++stale;
         return false;
       }
-      if (tick == entries_.back().tick) {
-        ++duplicates_;
+      if (tick == entries.back().tick) {
+        ++duplicate_count;
         return false;
       }
     }
-    entries_.push_back(Entry{tick, std::move(value)});
-    ++accepted_;
-    while (entries_.size() > capacity_)
-      entries_.pop_front();
+    entries.push_back(Entry{tick, std::move(value)});
+    ++accepted_count;
+    while (entries.size() > capacity)
+      entries.pop_front();
     return true;
   }
 
@@ -121,20 +121,20 @@ public:
   // snapshots. Entries before the bracketing pair are pruned.
   template <typename Lerp>
   [[nodiscard]] std::optional<T> sample(std::uint64_t target, Lerp &&lerp) {
-    if (entries_.empty())
+    if (entries.empty())
       return std::nullopt;
-    while (entries_.size() > 2 && entries_[1].tick <= target)
-      entries_.pop_front();
-    if (entries_.size() == 1 || entries_.front().tick >= target)
-      return entries_.front().value;
-    if (target >= entries_.back().tick)
-      return entries_.back().value;
+    while (entries.size() > 2 && entries[1].tick <= target)
+      entries.pop_front();
+    if (entries.size() == 1 || entries.front().tick >= target)
+      return entries.front().value;
+    if (target >= entries.back().tick)
+      return entries.back().value;
     // Find the bracketing pair (buffer is tick-ordered and small).
     std::size_t i = 0;
-    while (i + 1 < entries_.size() && entries_[i + 1].tick < target)
+    while (i + 1 < entries.size() && entries[i + 1].tick < target)
       ++i;
-    const Entry &a = entries_[i];
-    const Entry &b = entries_[i + 1];
+    const Entry &a = entries[i];
+    const Entry &b = entries[i + 1];
     const float span =
         static_cast<float>(std::max<std::uint64_t>(b.tick - a.tick, 1));
     const float t =
@@ -147,51 +147,51 @@ public:
   template <typename Lerp>
   [[nodiscard]] std::optional<T> sample_delayed(std::uint64_t delay_ticks,
                                                 Lerp &&lerp) {
-    if (entries_.empty())
+    if (entries.empty())
       return std::nullopt;
-    const std::uint64_t newest = entries_.back().tick;
+    const std::uint64_t newest = entries.back().tick;
     const std::uint64_t target =
-        newest > delay_ticks ? newest - delay_ticks : entries_.front().tick;
+        newest > delay_ticks ? newest - delay_ticks : entries.front().tick;
     return sample(target, std::forward<Lerp>(lerp));
   }
 
-  void clear() { entries_.clear(); }
+  void clear() { entries.clear(); }
 
   // Restart interpolation around the freshest snapshot (Pumpkin's
   // serve reset: stale bracketing would smear entities across a
   // teleport). No-op when empty.
   void clear_keeping_newest() {
-    if (entries_.empty())
+    if (entries.empty())
       return;
-    Entry newest = std::move(entries_.back());
-    entries_.clear();
-    entries_.push_back(std::move(newest));
+    Entry newest = std::move(entries.back());
+    entries.clear();
+    entries.push_back(std::move(newest));
   }
 
-  [[nodiscard]] bool empty() const { return entries_.empty(); }
-  [[nodiscard]] std::size_t size() const { return entries_.size(); }
+  [[nodiscard]] bool empty() const { return entries.empty(); }
+  [[nodiscard]] std::size_t size() const { return entries.size(); }
   [[nodiscard]] const T *newest() const {
-    return entries_.empty() ? nullptr : &entries_.back().value;
+    return entries.empty() ? nullptr : &entries.back().value;
   }
   [[nodiscard]] const T *oldest() const {
-    return entries_.empty() ? nullptr : &entries_.front().value;
+    return entries.empty() ? nullptr : &entries.front().value;
   }
   [[nodiscard]] std::uint64_t newest_tick() const {
-    return entries_.empty() ? 0 : entries_.back().tick;
+    return entries.empty() ? 0 : entries.back().tick;
   }
 
   // Push accounting, for HUDs/logs and for spotting a sender that
   // stopped stamping monotonic ticks.
-  [[nodiscard]] std::uint64_t accepted() const { return accepted_; }
-  [[nodiscard]] std::uint64_t duplicates() const { return duplicates_; }
-  [[nodiscard]] std::uint64_t stale_dropped() const { return stale_; }
+  [[nodiscard]] std::uint64_t accepted() const { return accepted_count; }
+  [[nodiscard]] std::uint64_t duplicates() const { return duplicate_count; }
+  [[nodiscard]] std::uint64_t stale_dropped() const { return stale; }
 
 private:
-  std::deque<Entry> entries_;
-  std::size_t capacity_;
-  std::uint64_t accepted_ = 0;
-  std::uint64_t duplicates_ = 0;
-  std::uint64_t stale_ = 0;
+  std::deque<Entry> entries;
+  std::size_t capacity;
+  std::uint64_t accepted_count = 0;
+  std::uint64_t duplicate_count = 0;
+  std::uint64_t stale = 0;
 };
 
 } // namespace afterhours::online
