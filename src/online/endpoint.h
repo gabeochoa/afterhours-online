@@ -161,48 +161,48 @@ public:
 
   explicit ConnectAttempt(
       std::chrono::nanoseconds deadline = DEFAULT_DEADLINE)
-      : deadline_(deadline) {}
+      : deadline(deadline) {}
 
   void begin(TimePoint now) {
-    active_ = true;
-    hello_sent_ = false;
-    welcomed_ = false;
-    started_ = now;
+    in_progress = true;
+    hello_dispatched = false;
+    welcome_received = false;
+    started = now;
   }
-  void reset() { active_ = false; hello_sent_ = welcomed_ = false; }
-  void note_hello_sent() { hello_sent_ = true; }
-  void note_welcomed() { welcomed_ = true; }
+  void reset() { in_progress = false; hello_dispatched = welcome_received = false; }
+  void note_hello_sent() { hello_dispatched = true; }
+  void note_welcomed() { welcome_received = true; }
 
-  [[nodiscard]] bool active() const { return active_; }
-  [[nodiscard]] bool hello_sent() const { return hello_sent_; }
-  [[nodiscard]] bool welcomed() const { return welcomed_; }
+  [[nodiscard]] bool active() const { return in_progress; }
+  [[nodiscard]] bool hello_sent() const { return hello_dispatched; }
+  [[nodiscard]] bool welcomed() const { return welcome_received; }
 
   // Terminal disconnect while connecting: ends the attempt and
   // returns the status text. nullopt once welcomed (the disconnect is
   // a mid-session event, not a connect failure).
   [[nodiscard]] std::optional<std::string_view>
   note_disconnected(DisconnectReason reason) {
-    if (!active_ || welcomed_)
+    if (!in_progress || welcome_received)
       return std::nullopt;
-    active_ = false;
-    return connect_failure_status(reason, hello_sent_);
+    in_progress = false;
+    return connect_failure_status(reason, hello_dispatched);
   }
 
   // Deadline check; on expiry ends the attempt and returns status.
   [[nodiscard]] std::optional<std::string_view> poll(TimePoint now) {
-    if (!active_ || welcomed_ || now - started_ < deadline_)
+    if (!in_progress || welcome_received || now - started < deadline)
       return std::nullopt;
-    active_ = false;
-    return std::string_view{hello_sent_ ? "Connect failed: no welcome from server"
+    in_progress = false;
+    return std::string_view{hello_dispatched ? "Connect failed: no welcome from server"
                                         : "Connect failed: server unreachable"};
   }
 
 private:
-  std::chrono::nanoseconds deadline_;
-  TimePoint started_{};
-  bool active_ = false;
-  bool hello_sent_ = false;
-  bool welcomed_ = false;
+  std::chrono::nanoseconds deadline;
+  TimePoint started{};
+  bool in_progress = false;
+  bool hello_dispatched = false;
+  bool welcome_received = false;
 };
 
 // Per-peer round-trip tracker (OG-20, extends OG-07). Outstanding
@@ -215,25 +215,25 @@ public:
   static constexpr std::chrono::seconds DEFAULT_STALE_AFTER{4};
 
   void note_ping(PeerId peer, std::uint32_t seq, TimePoint now) {
-    auto &pending = pending_[peer];
-    pending[seq] = now;
-    while (pending.size() > 8)
-      pending.erase(pending.begin());
+    auto &outstanding = pending[peer];
+    outstanding[seq] = now;
+    while (outstanding.size() > 8)
+      outstanding.erase(outstanding.begin());
   }
 
   // Record a Pong; returns the raw sample in ms when (peer, seq) was
   // outstanding. The first Pong wins; duplicates are ignored.
   [[nodiscard]] std::optional<float> note_pong(PeerId peer, std::uint32_t seq,
                                                TimePoint now) {
-    const auto pit = pending_.find(peer);
-    if (pit == pending_.end())
+    const auto pit = pending.find(peer);
+    if (pit == pending.end())
       return std::nullopt;
     const auto sit = pit->second.find(seq);
     if (sit == pit->second.end())
       return std::nullopt;
     const float sample = std::chrono::duration<float, std::milli>(now - sit->second).count();
     pit->second.erase(sit);
-    PeerState &state = peers_[peer];
+    PeerState &state = peers[peer];
     state.rtt_ms = state.rtt_ms <= 0.f ? sample : 0.75f * state.rtt_ms + 0.25f * sample;
     state.last_sample = now;
     state.has_sample = true;
@@ -244,18 +244,18 @@ public:
   [[nodiscard]] std::optional<float>
   rtt_ms(PeerId peer, TimePoint now,
          std::chrono::nanoseconds stale_after = DEFAULT_STALE_AFTER) const {
-    const auto it = peers_.find(peer);
-    if (it == peers_.end() || !it->second.has_sample ||
+    const auto it = peers.find(peer);
+    if (it == peers.end() || !it->second.has_sample ||
         now - it->second.last_sample > stale_after)
       return std::nullopt;
     return it->second.rtt_ms;
   }
 
   void forget_peer(PeerId peer) {
-    pending_.erase(peer);
-    peers_.erase(peer);
+    pending.erase(peer);
+    peers.erase(peer);
   }
-  void clear() { pending_.clear(); peers_.clear(); }
+  void clear() { pending.clear(); peers.clear(); }
 
 private:
   struct PeerState {
@@ -263,8 +263,8 @@ private:
     TimePoint last_sample{};
     bool has_sample = false;
   };
-  std::map<PeerId, std::map<std::uint32_t, TimePoint>> pending_;
-  std::map<PeerId, PeerState> peers_;
+  std::map<PeerId, std::map<std::uint32_t, TimePoint>> pending;
+  std::map<PeerId, PeerState> peers;
 };
 
 // OR-latch for one-frame edges on unreliable inputs (OG-23): a jump
@@ -273,17 +273,17 @@ private:
 // outgoing input; receiver side: latch on receipt, consume per tick.
 class EdgeLatch {
 public:
-  void latch(bool pressed) { latched_ = latched_ || pressed; }
-  [[nodiscard]] bool peek() const { return latched_; }
+  void latch(bool pressed) { latched = latched || pressed; }
+  [[nodiscard]] bool peek() const { return latched; }
   [[nodiscard]] bool consume() {
-    const bool value = latched_;
-    latched_ = false;
+    const bool value = latched;
+    latched = false;
     return value;
   }
-  void clear() { latched_ = false; }
+  void clear() { latched = false; }
 
 private:
-  bool latched_ = false;
+  bool latched = false;
 };
 
 } // namespace afterhours::online

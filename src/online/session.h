@@ -38,21 +38,21 @@ namespace afterhours::online {
 // one handed out again, matching disconnect-then-rejoin behavior.
 template <typename Side> class PeerBook {
 public:
-  explicit PeerBook(std::vector<Side> sides) : sides_(std::move(sides)) {}
+  explicit PeerBook(std::vector<Side> sides) : side_list(std::move(sides)) {}
 
   enum class AssignResult { Assigned, AlreadyAssigned, Full };
 
   // Assign the first free side to a peer.
   [[nodiscard]] AssignResult assign(PeerId peer, Side *assigned = nullptr) {
-    if (by_peer_.contains(peer)) {
+    if (by_peer.contains(peer)) {
       if (assigned)
-        *assigned = by_peer_.at(peer);
+        *assigned = by_peer.at(peer);
       return AssignResult::AlreadyAssigned;
     }
-    for (const Side &side : sides_) {
-      if (!by_side_.contains(side)) {
-        by_peer_[peer] = side;
-        by_side_[side] = peer;
+    for (const Side &side : side_list) {
+      if (!by_side.contains(side)) {
+        by_peer[peer] = side;
+        by_side[side] = peer;
         if (assigned)
           *assigned = side;
         return AssignResult::Assigned;
@@ -62,34 +62,34 @@ public:
   }
 
   [[nodiscard]] bool free_peer(PeerId peer) {
-    const auto it = by_peer_.find(peer);
-    if (it == by_peer_.end())
+    const auto it = by_peer.find(peer);
+    if (it == by_peer.end())
       return false;
-    by_side_.erase(it->second);
-    by_peer_.erase(it);
+    by_side.erase(it->second);
+    by_peer.erase(it);
     return true;
   }
 
-  void clear() { by_peer_.clear(); by_side_.clear(); }
+  void clear() { by_peer.clear(); by_side.clear(); }
 
   [[nodiscard]] std::optional<Side> side_of(PeerId peer) const {
-    const auto it = by_peer_.find(peer);
-    return it == by_peer_.end() ? std::nullopt
+    const auto it = by_peer.find(peer);
+    return it == by_peer.end() ? std::nullopt
                                : std::optional<Side>{it->second};
   }
   [[nodiscard]] std::optional<PeerId> peer_of(Side side) const {
-    const auto it = by_side_.find(side);
-    return it == by_side_.end() ? std::nullopt
+    const auto it = by_side.find(side);
+    return it == by_side.end() ? std::nullopt
                                 : std::optional<PeerId>{it->second};
   }
-  [[nodiscard]] std::size_t size() const { return by_peer_.size(); }
-  [[nodiscard]] bool full() const { return by_peer_.size() >= sides_.size(); }
-  [[nodiscard]] const std::vector<Side> &sides() const { return sides_; }
+  [[nodiscard]] std::size_t size() const { return by_peer.size(); }
+  [[nodiscard]] bool full() const { return by_peer.size() >= side_list.size(); }
+  [[nodiscard]] const std::vector<Side> &sides() const { return side_list; }
 
 private:
-  std::vector<Side> sides_;
-  std::map<PeerId, Side> by_peer_;
-  std::map<Side, PeerId> by_side_;
+  std::vector<Side> side_list;
+  std::map<PeerId, Side> by_peer;
+  std::map<Side, PeerId> by_side;
 };
 
 // Pumps a Transport into a game handler in the shared order: every
@@ -108,36 +108,36 @@ template <typename Side, typename Handler> class SessionDriver {
 public:
   SessionDriver(Transport &transport, std::vector<Side> sides,
                 Handler &handler)
-      : transport_(transport), book_(std::move(sides)), handler_(handler) {}
+      : backend(transport), peer_book(std::move(sides)), handler(handler) {}
 
   // Drain every queued event once. Returns the number drained.
   std::size_t pump() {
     std::size_t drained = 0;
-    while (auto event = transport_.poll()) {
+    while (auto event = backend.poll()) {
       ++drained;
       if (const auto *connected = std::get_if<Connected>(&*event)) {
-        handler_.on_connected(connected->peer);
+        handler.on_connected(connected->peer);
       } else if (const auto *packet = std::get_if<Packet>(&*event)) {
-        handler_.on_packet(*packet);
+        handler.on_packet(*packet);
       } else if (const auto *disconnected =
                      std::get_if<Disconnected>(&*event)) {
-        const std::optional<Side> side = book_.side_of(disconnected->peer);
-        (void)book_.free_peer(disconnected->peer);
-        handler_.on_disconnected(disconnected->peer, disconnected->reason,
+        const std::optional<Side> side = peer_book.side_of(disconnected->peer);
+        (void)peer_book.free_peer(disconnected->peer);
+        handler.on_disconnected(disconnected->peer, disconnected->reason,
                                  side);
       }
     }
     return drained;
   }
 
-  [[nodiscard]] PeerBook<Side> &book() { return book_; }
-  [[nodiscard]] const PeerBook<Side> &book() const { return book_; }
-  [[nodiscard]] Transport &transport() { return transport_; }
+  [[nodiscard]] PeerBook<Side> &book() { return peer_book; }
+  [[nodiscard]] const PeerBook<Side> &book() const { return peer_book; }
+  [[nodiscard]] Transport &transport() { return backend; }
 
 private:
-  Transport &transport_;
-  PeerBook<Side> book_;
-  Handler &handler_;
+  Transport &backend;
+  PeerBook<Side> peer_book;
+  Handler &handler;
 };
 
 } // namespace afterhours::online
