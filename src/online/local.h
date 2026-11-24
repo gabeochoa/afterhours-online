@@ -20,6 +20,7 @@ struct LocalHub {
   struct Inbox {
     std::mutex mutex;
     std::deque<Event> events;
+    bool removed = false; // dropped by a peer: a later close() must not re-announce it
   };
 
   mutable std::mutex mutex;
@@ -41,8 +42,8 @@ public:
     std::lock_guard lock(hub_->mutex);
     if (hub_->has_server)
       return false;
-    inbox_ = std::make_shared<LocalHub::Inbox>();
-    hub_->inboxes[kServerPeer] = inbox_;
+    inbox = std::make_shared<LocalHub::Inbox>();
+    hub_->inboxes[kServerPeer] = inbox;
     hub_->has_server = true;
     local_id_ = kServerPeer;
     server_ = true;
@@ -59,8 +60,8 @@ public:
       if (!hub_->has_server)
         return false;
       assigned = hub_->next_peer_id++;
-      inbox_ = std::make_shared<LocalHub::Inbox>();
-      hub_->inboxes[assigned] = inbox_;
+      inbox = std::make_shared<LocalHub::Inbox>();
+      hub_->inboxes[assigned] = inbox;
     }
     local_id_ = assigned;
     server_ = false;
@@ -81,8 +82,15 @@ public:
       if (server_)
         hub_->has_server = false;
     }
-    notify_all(Disconnected{closing, DisconnectReason::ClosedByPeer}, closing);
-    inbox_.reset();
+    bool announce = true;
+    if (inbox) {
+      std::lock_guard lock(inbox->mutex);
+      announce = !inbox->removed;
+    }
+    if (announce)
+      notify_all(Disconnected{closing, DisconnectReason::ClosedByPeer},
+                 closing);
+    inbox.reset();
     local_id_ = kInvalidPeer;
     server_ = false;
   }
@@ -104,12 +112,13 @@ public:
     // so the event is still deliverable after hub removal.
     {
       std::lock_guard lock(dropped->mutex);
+      dropped->removed = true;
       dropped->events.emplace_back(
           Disconnected{local_id_, DisconnectReason::ClosedByPeer});
     }
-    if (inbox_) {
-      std::lock_guard lock(inbox_->mutex);
-      inbox_->events.emplace_back(
+    if (inbox) {
+      std::lock_guard lock(inbox->mutex);
+      inbox->events.emplace_back(
           Disconnected{peer, DisconnectReason::LocalClose});
     }
     return true;
@@ -139,13 +148,13 @@ public:
   }
 
   std::optional<Event> poll() override {
-    if (!inbox_)
+    if (!inbox)
       return std::nullopt;
-    std::lock_guard lock(inbox_->mutex);
-    if (inbox_->events.empty())
+    std::lock_guard lock(inbox->mutex);
+    if (inbox->events.empty())
       return std::nullopt;
-    Event event = std::move(inbox_->events.front());
-    inbox_->events.pop_front();
+    Event event = std::move(inbox->events.front());
+    inbox->events.pop_front();
     return event;
   }
 
@@ -200,7 +209,7 @@ private:
   }
 
   std::shared_ptr<LocalHub> hub_;
-  std::shared_ptr<LocalHub::Inbox> inbox_;
+  std::shared_ptr<LocalHub::Inbox> inbox;
   PeerId local_id_ = kInvalidPeer;
   bool server_ = false;
   bool open_ = false;
