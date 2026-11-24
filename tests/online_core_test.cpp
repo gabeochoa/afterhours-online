@@ -213,8 +213,88 @@ static void test_testing_fault_transport() {
          "corrupted sequence packet is rejected");
 }
 
+// ---- gap/online-session-layer: snapshot, codec ----
+
+namespace session_layer_test {
+struct Snap {
+  float x = 0.f;
+  float y = 0.f;
+};
+static Snap lerp_snap(const Snap &a, const Snap &b, float t) {
+  return {a.x + (b.x - a.x) * t, 42.f}; // y proves "rest from newer"
+}
+enum class Msg : std::uint8_t { Hello = 3, Input = 1 };
+struct Hello {
+  std::uint32_t version = 0;
+  std::uint8_t character = 0;
+};
+constexpr auto serialize(auto &archive, Hello &packet) {
+  return archive(packet.version, packet.character);
+}
+} // namespace session_layer_test
+
+static void test_snapshot_buffer_and_rate_gate() {
+  using namespace session_layer_test;
+  SnapshotBuffer<Snap> buffer(4);
+  expect(!buffer.sample_delayed(6, lerp_snap), "empty buffer samples nothing");
+  expect(buffer.push(10, {0.f, 1.f}), "first snapshot accepted");
+  expect(buffer.push(12, {20.f, 2.f}), "newer snapshot accepted");
+  expect(!buffer.push(12, {99.f, 9.f}), "duplicate tick rejected");
+  expect(!buffer.push(11, {99.f, 9.f}), "stale tick rejected");
+  expect(buffer.duplicates() == 1 && buffer.stale_dropped() == 1 &&
+             buffer.accepted() == 2,
+         "snapshot push accounting");
+  // delay 1 behind newest(12) -> target 11, halfway 10..12
+  auto mid = buffer.sample_delayed(1, lerp_snap);
+  expect(mid && mid->x == 10.f && mid->y == 42.f,
+         "interpolation lerps x, takes rest from newer");
+  expect(buffer.push(13, {30.f, 3.f}) && buffer.push(14, {40.f, 4.f}) &&
+             buffer.push(15, {50.f, 5.f}),
+         "fill to capacity");
+  expect(buffer.size() == 4 && buffer.newest_tick() == 15,
+         "capacity bounds buffer, oldest pruned");
+  auto past = buffer.sample(999, lerp_snap);
+  expect(past && past->x == 50.f, "no extrapolation past newest");
+  buffer.clear_keeping_newest();
+  expect(buffer.size() == 1 && buffer.newest_tick() == 15,
+         "clear_keeping_newest restarts around freshest");
+
+  using namespace std::chrono_literals;
+  RateGate gate = gate_for_hz(20.0); // 50ms
+  const auto t0 = RateGate::Clock::time_point{} + 1s;
+  expect(gate.try_take(t0), "rate gate first send allowed");
+  expect(!gate.try_take(t0 + 49ms), "rate gate blocks inside period");
+  expect(gate.try_take(t0 + 50ms), "rate gate opens at period");
+  gate.reset();
+  expect(gate.try_take(t0), "rate gate reset allows immediate send");
+}
+
+static void test_typed_codec() {
+  using namespace session_layer_test;
+  Hello hello{7u, 2u};
+  const auto bytes = encode_typed(Msg::Hello, hello);
+  expect(peek_typed<Msg>(bytes) == Msg::Hello, "typed codec peeks type");
+  const auto back = decode_typed<Msg, Hello>(bytes, Msg::Hello);
+  expect(back && back->version == 7u && back->character == 2u,
+         "typed codec round-trips");
+  expect(!decode_typed<Msg, Hello>(bytes, Msg::Input),
+         "typed codec rejects wrong expected type");
+  auto trailing = bytes;
+  trailing.push_back(std::byte{0});
+  expect(!decode_typed<Msg, Hello>(trailing, Msg::Hello),
+         "typed codec requires exhaustion");
+  auto truncated = bytes;
+  truncated.pop_back();
+  expect(!decode_typed<Msg, Hello>(truncated, Msg::Hello),
+         "typed codec rejects truncated input");
+  expect(!peek_typed<Msg>(std::span<const std::byte>{}),
+         "typed codec peek rejects empty input");
+}
+
 int main() {
   test_codec();
+  test_snapshot_buffer_and_rate_gate();
+  test_typed_codec();
   test_local_transport();
   test_local_disconnect_peer();
   test_testing_sequence_envelope();

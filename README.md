@@ -14,6 +14,8 @@ flag, Steamworks, or GNS to a build.
 | `src/online/local.h` | In-process server/client transport for single-player and tests |
 | `src/online/online.h` | Convenience include for all of the above |
 | `src/online/testing.h` | Optional test support: event pump/matchers, sequence envelope, fault-injecting transport decorator |
+| `src/online/snapshot.h` | `SnapshotBuffer<T>` interpolation buffer (stale/duplicate accounting, no extrapolation) and wall-clock `RateGate` send pacing |
+| `src/online/codec.h` | Typed-packet codec over zpp::bits: type byte first, validated on decode, exact exhaustion required |
 
 Backends that need a real library (standalone GNS first, Steamworks later)
 are intentionally **opt-in**: a game that wants one adds that backend's one
